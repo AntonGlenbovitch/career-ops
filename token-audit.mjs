@@ -9,7 +9,8 @@ const IGNORE_DIRS = new Set(['.git', 'node_modules']);
 const CONTEXT_SCENARIOS = {
   single_offer_eval: ['CLAUDE.md', 'modes/_shared.md', 'modes/oferta.md', 'cv.md', 'article-digest.md'],
   single_offer_eval_plus_pdf: ['CLAUDE.md', 'modes/_shared.md', 'modes/oferta.md', 'modes/pdf.md', 'cv.md', 'article-digest.md'],
-  batch_worker: ['batch/batch-prompt.md', 'cv.md', 'article-digest.md', 'llms.txt'],
+  batch_worker_full: ['batch/batch-prompt.md', 'modes/_shared.md', 'cv.md', 'article-digest.md', 'llms.txt'],
+  batch_worker_lite: ['batch/batch-prompt-lite.md', 'cv.md'],
 };
 
 // Two-pass gate assumptions for estimating expected savings.
@@ -77,16 +78,20 @@ for (const [name, scenarioFiles] of Object.entries(CONTEXT_SCENARIOS)) {
   console.log(`- ${name}: ~${total} tokens${missingText}`);
 }
 
-const baselineBatch = scenarioTotals.batch_worker ?? 0;
-if (baselineBatch > 0) {
-  const twoPassAvg = LITE_PASS_TOKENS + (UNCERTAIN_RATE * baselineBatch);
-  const avgSavings = baselineBatch - twoPassAvg;
-  const pct = baselineBatch > 0 ? (avgSavings / baselineBatch) * 100 : 0;
+const baselineFullPass = scenarioTotals.batch_worker_full ?? 0;
+const litePassTokens = scenarioTotals.batch_worker_lite ?? LITE_PASS_TOKENS;
+
+if (baselineFullPass > 0) {
+  const twoPassAvg = litePassTokens + (UNCERTAIN_RATE * baselineFullPass);
+  const avgSavings = baselineFullPass - twoPassAvg;
+  const pct = baselineFullPass > 0 ? (avgSavings / baselineFullPass) * 100 : 0;
 
   console.log('\nTwo-pass gate estimate (for batch workflow):');
-  console.log(`- Baseline now (full pass every offer): ~${baselineBatch.toFixed(0)} tokens/offer`);
-  console.log(`- Two-pass avg: ~${twoPassAvg.toFixed(0)} tokens/offer (lite=${LITE_PASS_TOKENS}, uncertain_rate=${UNCERTAIN_RATE})`);
-  console.log(`- Estimated savings: ~${avgSavings.toFixed(0)} tokens/offer (${pct.toFixed(1)}%)`);
+  console.log(`- Full pass (detailed evaluation): ~${baselineFullPass.toFixed(0)} tokens/offer`);
+  console.log(`- Lite pass (quick filter): ~${litePassTokens.toFixed(0)} tokens/offer`);
+  console.log(`- Two-pass average: ~${twoPassAvg.toFixed(0)} tokens/offer (lite=${litePassTokens.toFixed(0)}, uncertain_rate=${UNCERTAIN_RATE})`);
+  console.log(`- Estimated savings: ~${avgSavings.toFixed(0)} tokens/offer (${pct.toFixed(1)}% reduction)`);
+  console.log(`\nFormula: (lite + uncertain_rate * full) = (${litePassTokens.toFixed(0)} + ${UNCERTAIN_RATE} * ${baselineFullPass.toFixed(0)}) = ${twoPassAvg.toFixed(0)}`);
 }
 
 console.log('\nQuick wins:');

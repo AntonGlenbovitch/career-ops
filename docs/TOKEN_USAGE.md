@@ -20,7 +20,8 @@ Measured with `node token-audit.mjs`.
 
 - Single offer evaluation (`CLAUDE.md + _shared + oferta + cv + digest`) ~7411 tokens
 - Single offer evaluation + PDF mode ~8527 tokens
-- Batch worker core (`batch-prompt + cv + digest`) ~4399 tokens
+- Batch worker full pass (`batch-prompt + _shared + cv`) ~5947 tokens
+- **Batch worker lite pass (`batch-prompt-lite + cv`)** ~2890 tokens (NEW)
 
 ## Direct answer: how much this PR saves
 
@@ -28,44 +29,92 @@ The previous PR (audit tooling + docs only) saves **~0 tokens/offer** by itself,
 
 ## Where token usage is excessive
 
-1. `batch/batch-prompt.md` is a full self-contained prompt and carries all rules into every worker call.
-2. `CLAUDE.md` + `modes/_shared.md` duplicate guidance concepts (workflow rules, scoring language, tracker rules).
-3. Optional context files (`article-digest.md`, `llms.txt`) are listed as always-load in some paths, even when not necessary for an obvious reject/accept.
+1. **`modes/_shared.md` (~1540 tokens) is loaded in EVERY evaluation mode** — oferta, ofertas, pdf, apply, scan, batch. This is the single largest optimization opportunity.
+2. `batch/batch-prompt.md` (~3386 tokens) duplicates the full scoring rubric that's also in `_shared.md` (triplication across batch-prompt, _shared, and CLAUDE.md).
+3. Optional context files (`article-digest.md`, `llms.txt`) are always loaded even for obvious rejects that could be filtered in ~30 seconds.
+4. `CLAUDE.md` + `modes/_shared.md` have overlapping guidance (workflow rules, scoring language, tracker rules).
 
-## Recommended change for lower token usage
+## Recommended change: Two-Pass Evaluation Gate (IMPLEMENTED)
 
-### Priority recommendation: introduce a **two-pass evaluation gate**
+### How it works
 
-Use a short pass first, and only escalate to full context when needed.
+Two-pass architecture for batch processing:
 
-1. **Pass 1 (cheap):**
-   - Inputs: JD + minimal rubric (must-have filters + compensation/location constraints)
-   - Output: `reject`, `accept`, or `uncertain`
-2. **Pass 2 (full):**
-   - Trigger only for `uncertain`
-   - Inputs: current full prompt stack (profile, digest, negotiation, full scoring A-F)
+**Pass 1 (Lite):** Quick filter in ~30 seconds per offer
+- File: `batch/batch-prompt-lite.md` (~400 tokens)
+- Context: JD + candidate summary only (CV metadata, no article-digest or llms.txt)
+- Decision: `reject`, `accept`, or `uncertain`
+- **Key optimization:** Does NOT load `modes/_shared.md` (~1540 tokens saved per offer)
 
-### Expected average savings formula
+**Pass 2 (Full):** Detailed evaluation only for uncertain/promising cases
+- File: `batch/batch-prompt.md` (~3386 tokens)
+- Context: Full stack (JD, CV, article-digest, llms.txt, modes/_shared.md)
+- Output: Detailed A-F report, PDF, tracker entry
 
-- Baseline (today): `full_tokens`
-- Two-pass average: `lite_tokens + uncertain_rate * full_tokens`
-- Savings per offer: `full_tokens - (lite_tokens + uncertain_rate * full_tokens)`
+### Expected savings formula
 
-Using current measured batch baseline `full_tokens = 4399` and example assumptions `lite_tokens = 900`:
+- Full pass (every offer): 4399 tokens
+- Lite pass (first decision): 450 tokens (batch-prompt-lite + cv)
+- Full pass (for uncertain): 4399 tokens
+- **Two-pass average (at X% uncertain rate):** `450 + (X * 4399)`
 
-- If uncertain rate = 25% → avg savings ≈ **2399 tokens/offer** (~54.5%)
-- If uncertain rate = 35% → avg savings ≈ **1960 tokens/offer** (~44.6%)
-- If uncertain rate = 50% → avg savings ≈ **1299 tokens/offer** (~29.5%)
+### Measured impact (Actual)
 
-`token-audit.mjs` now prints this estimate and supports overrides:
+**As measured by `token-audit.mjs` with real file sizes:**
+- **Lite tokens:** 2890 (batch-prompt-lite + cv only)
+- **Full tokens:** 5947 (batch-prompt + _shared + cv)
+- **Uncertain rate:** 35% (default, conservative estimate for well-targeted batch)
+- **Two-pass average:** 2890 + (0.35 × 5947) = **4971 tokens/offer**
+- **Savings vs. full pass:** 5947 − 4971 = **976 tokens/offer (16.4% reduction)**
+
+This is more modest than theoretical estimates because `cv.md` itself is ~2400 tokens—the lite pass must still load it for basic filtering.
+
+Run your own scenarios:
 
 ```bash
-TOKEN_AUDIT_LITE_TOKENS=900 TOKEN_AUDIT_UNCERTAIN_RATE=0.35 node token-audit.mjs
+# Measure actual token footprints
+npm run token:audit
+
+# Model higher uncertain rate (more offers need full pass)
+TOKEN_AUDIT_UNCERTAIN_RATE=0.50 npm run token:audit
+
+# Model lower uncertain rate (better filtering catches more)
+TOKEN_AUDIT_UNCERTAIN_RATE=0.25 npm run token:audit
 ```
 
-## Low-risk follow-ups
+### Files delivered
 
-- Create `batch/batch-prompt-lite.md` for pass 1.
-- Keep `batch/batch-prompt.md` for pass 2.
-- Load `article-digest.md` and `llms.txt` only when pass 1 returns `uncertain`.
-- Move duplicate “global rules” into one canonical shared file and reference it from other prompts.
+- ✅ `batch/batch-prompt-lite.md` — Lite pass prompt (450 tokens)
+- ✅ `batch/batch-prompt.md` — Full pass prompt (unchanged from batch-prompt.md)
+- ✅ `token-audit.mjs` — Updated to measure both scenarios
+- ✅ `package.json` — `npm run token:audit` script
+
+### Integration notes
+
+Lite pass is ready to use in any batch orchestration. Decision logic:
+
+```
+If offer score from lite pass = `accept` → skip full pass, register in tracker as pre-qualified
+If offer score from lite pass = `reject` → skip full pass, discard
+If offer score from lite pass = `uncertain` → run full pass, then generate report + PDF
+```
+
+### Why this optimization makes sense
+
+**The tradeoff:**
+
+Lite pass must still load `cv.md` (~2400 tokens) because it needs to verify candidate fit (seniority, experience). So we save what we can:
+- **Skip in Pass 1:** `batch-prompt.md` full prompt (~3386 tokens) 
+- **Skip in Pass 1:** `modes/_shared.md` rubric (~1540 tokens)
+- **Skip in Pass 1:** `article-digest.md`, `llms.txt` (optional context)
+- **Total saved per lite pass:** ~4926 tokens
+
+But `cv.md` is mandatory for filtering, so:
+- **Lite pass minimum:** `batch-prompt-lite` (~450 tokens) + `cv.md` (~2400 tokens) = 2890 tokens
+- **Savings per lite pass:** 5947 − 2890 = 3057 tokens
+
+**Net effect:** 
+- If 65% of batch is rejected/accepted in lite pass (35% uncertain): **976 tokens saved per offer on average**
+- If filtering improves to 75% pass-through rate: **1486 tokens saved per offer**
+
+This is useful for high-volume batch processing (100+ offers), but single-offer evaluations should still use full context for accuracy.
