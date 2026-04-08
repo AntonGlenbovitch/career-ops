@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { readdirSync, readFileSync, statSync, existsSync } from 'fs';
-import { join } from 'path';
+import { join } from 'path'; 
 
 const SCAN_DIRS = ['.', 'modes', 'batch', 'docs', 'config'];
 const ALLOWED_EXT = new Set(['.md', '.yml']);
