@@ -22,6 +22,10 @@ Measured with `node token-audit.mjs`.
 - Single offer evaluation + PDF mode ~8527 tokens
 - Batch worker core (`batch-prompt + cv + digest`) ~4399 tokens
 
+## Direct answer: how much this PR saves
+
+The previous PR (audit tooling + docs only) saves **~0 tokens/offer** by itself, because it did not change runtime prompts.
+
 ## Where token usage is excessive
 
 1. `batch/batch-prompt.md` is a full self-contained prompt and carries all rules into every worker call.
@@ -41,9 +45,23 @@ Use a short pass first, and only escalate to full context when needed.
    - Trigger only for `uncertain`
    - Inputs: current full prompt stack (profile, digest, negotiation, full scoring A-F)
 
-Expected impact:
-- Reduces average tokens per offer substantially in high-volume batches (many offers are obvious rejects).
-- Preserves quality by keeping full analysis only for borderline opportunities.
+### Expected average savings formula
+
+- Baseline (today): `full_tokens`
+- Two-pass average: `lite_tokens + uncertain_rate * full_tokens`
+- Savings per offer: `full_tokens - (lite_tokens + uncertain_rate * full_tokens)`
+
+Using current measured batch baseline `full_tokens = 4399` and example assumptions `lite_tokens = 900`:
+
+- If uncertain rate = 25% → avg savings ≈ **2399 tokens/offer** (~54.5%)
+- If uncertain rate = 35% → avg savings ≈ **1960 tokens/offer** (~44.6%)
+- If uncertain rate = 50% → avg savings ≈ **1299 tokens/offer** (~29.5%)
+
+`token-audit.mjs` now prints this estimate and supports overrides:
+
+```bash
+TOKEN_AUDIT_LITE_TOKENS=900 TOKEN_AUDIT_UNCERTAIN_RATE=0.35 node token-audit.mjs
+```
 
 ## Low-risk follow-ups
 

@@ -12,6 +12,12 @@ const CONTEXT_SCENARIOS = {
   batch_worker: ['batch/batch-prompt.md', 'cv.md', 'article-digest.md', 'llms.txt'],
 };
 
+// Two-pass gate assumptions for estimating expected savings.
+// Override via env vars if you have better measured values:
+//   TOKEN_AUDIT_LITE_TOKENS=900 TOKEN_AUDIT_UNCERTAIN_RATE=0.35 node token-audit.mjs
+const LITE_PASS_TOKENS = Number(process.env.TOKEN_AUDIT_LITE_TOKENS ?? 900);
+const UNCERTAIN_RATE = Number(process.env.TOKEN_AUDIT_UNCERTAIN_RATE ?? 0.35);
+
 const CHARS_PER_TOKEN = 4;
 const estimateTokens = (text) => Math.round(text.length / CHARS_PER_TOKEN);
 
@@ -51,6 +57,8 @@ rows.slice(0, 20).forEach((row, idx) => {
   console.log(`${String(idx + 1).padStart(2, ' ')}. ${String(row.tokens).padStart(5, ' ')} tok | ${row.path}`);
 });
 
+const scenarioTotals = {};
+
 console.log('\nEstimated context footprint by workflow:');
 for (const [name, scenarioFiles] of Object.entries(CONTEXT_SCENARIOS)) {
   let total = 0;
@@ -64,8 +72,21 @@ for (const [name, scenarioFiles] of Object.entries(CONTEXT_SCENARIOS)) {
     total += estimateTokens(readFileSync(file, 'utf8'));
   }
 
+  scenarioTotals[name] = total;
   const missingText = missing.length ? ` | missing: ${missing.join(', ')}` : '';
   console.log(`- ${name}: ~${total} tokens${missingText}`);
+}
+
+const baselineBatch = scenarioTotals.batch_worker ?? 0;
+if (baselineBatch > 0) {
+  const twoPassAvg = LITE_PASS_TOKENS + (UNCERTAIN_RATE * baselineBatch);
+  const avgSavings = baselineBatch - twoPassAvg;
+  const pct = baselineBatch > 0 ? (avgSavings / baselineBatch) * 100 : 0;
+
+  console.log('\nTwo-pass gate estimate (for batch workflow):');
+  console.log(`- Baseline now (full pass every offer): ~${baselineBatch.toFixed(0)} tokens/offer`);
+  console.log(`- Two-pass avg: ~${twoPassAvg.toFixed(0)} tokens/offer (lite=${LITE_PASS_TOKENS}, uncertain_rate=${UNCERTAIN_RATE})`);
+  console.log(`- Estimated savings: ~${avgSavings.toFixed(0)} tokens/offer (${pct.toFixed(1)}%)`);
 }
 
 console.log('\nQuick wins:');
