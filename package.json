@@ -13,7 +13,9 @@
     "update:check": "node update-system.mjs check",
     "update": "node update-system.mjs apply",
     "rollback": "node update-system.mjs rollback",
-    "token:audit": "node token-audit.mjs"
+    "token:audit": "node token-audit.mjs",
+    "liveness": "node check-liveness.mjs",
+    "scan": "node scan.mjs"
   },
   "keywords": [
     "ai",
@@ -30,6 +32,7 @@
   },
   "license": "MIT",
   "dependencies": {
+    "js-yaml": "^4.1.1",
     "playwright": "^1.58.1"
   }
 }
